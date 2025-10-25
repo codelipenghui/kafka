@@ -123,8 +123,8 @@ public class UnifiedLog implements AutoCloseable {
     private final Object lock = new Object();
     private final Map<String, Map<String, String>> metricNames = new HashMap<>();
 
-    // localLog The LocalLog instance containing non-empty log segments recovered from disk
-    private final LocalLog localLog;
+    // localLog The DataLog instance containing log storage (file-based or in-memory)
+    private final FileLog localLog;
     private final BrokerTopicStats brokerTopicStats;
     private final ProducerStateManager producerStateManager;
     private final boolean remoteStorageSystemEnable;
@@ -186,7 +186,7 @@ public class UnifiedLog implements AutoCloseable {
      *                       - Earliest offset of the log in response to ListOffsetRequest. To avoid OffsetOutOfRange exception after user seeks to earliest offset,
      *                         we make sure that logStartOffset <= log's highWatermark
      *                       Other activities such as log cleaning are not affected by logStartOffset.
-     * @param localLog The LocalLog instance containing non-empty log segments recovered from disk
+     * @param localLog The DataLog instance containing log storage (file-based or in-memory)
      * @param brokerTopicStats Container for Broker Topic Yammer Metrics
      * @param producerIdExpirationCheckIntervalMs How often to check for producer ids which need to be expired
      * @param leaderEpochCache The LeaderEpochFileCache instance (if any) containing state associated
@@ -200,7 +200,7 @@ public class UnifiedLog implements AutoCloseable {
      */
     @SuppressWarnings({"this-escape"})
     public UnifiedLog(long logStartOffset,
-                      LocalLog localLog,
+                      FileLog localLog,
                       BrokerTopicStats brokerTopicStats,
                       int producerIdExpirationCheckIntervalMs,
                       LeaderEpochFileCache leaderEpochCache,
@@ -369,8 +369,9 @@ public class UnifiedLog implements AutoCloseable {
                 time,
                 topicPartition,
                 logDirFailureChannel);
+        DataLogAdapter adapter = new DataLogAdapter(localLog);
         return new UnifiedLog(offsets.logStartOffset(),
-                localLog,
+                adapter,
                 brokerTopicStats,
                 producerIdExpirationCheckIntervalMs,
                 leaderEpochCache,

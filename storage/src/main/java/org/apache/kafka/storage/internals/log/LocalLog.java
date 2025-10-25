@@ -65,7 +65,7 @@ import static org.apache.kafka.storage.internals.log.LogFileUtils.isLogFile;
  * for a given segment.
  * NOTE: this class is not thread-safe, and it relies on the thread safety provided by the Log class.
  */
-public class LocalLog {
+public class LocalLog implements FileLog {
 
     private static final Logger LOG = LoggerFactory.getLogger(LocalLog.class);
 
