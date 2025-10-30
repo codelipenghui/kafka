@@ -43,6 +43,9 @@ public class DataLogAdapter implements FileLog {
 
     protected final DataLog delegate;
     private final boolean delegateIsFileLog;
+    private final LogDirFailureChannel logDirFailureChannel;
+    private final LogSegments dummySegments;
+    private LogSegment dummySegment;
 
     /**
      * Create an adapter wrapping the given DataLog implementation.
@@ -50,8 +53,28 @@ public class DataLogAdapter implements FileLog {
      * @param delegate The DataLog implementation to wrap
      */
     public DataLogAdapter(DataLog delegate) {
+        this(delegate, null);
+    }
+
+    /**
+     * Create an adapter wrapping the given DataLog implementation with a LogDirFailureChannel.
+     *
+     * @param delegate The DataLog implementation to wrap
+     * @param logDirFailureChannel The LogDirFailureChannel to use (can be null for FileLog delegates)
+     */
+    public DataLogAdapter(DataLog delegate, LogDirFailureChannel logDirFailureChannel) {
         this.delegate = delegate;
         this.delegateIsFileLog = delegate instanceof FileLog;
+        this.logDirFailureChannel = logDirFailureChannel;
+
+        // For non-FileLog delegates, create dummy segments to satisfy UnifiedLog expectations
+        if (!delegateIsFileLog) {
+            this.dummySegments = new LogSegments(delegate.topicPartition());
+            this.dummySegment = null; // Will be created on first roll or when needed
+        } else {
+            this.dummySegments = null;
+            this.dummySegment = null;
+        }
     }
 
     /**
@@ -85,7 +108,15 @@ public class DataLogAdapter implements FileLog {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
+        // Close dummy segment if it exists
+        if (dummySegment != null) {
+            try {
+                dummySegment.close();
+            } catch (Exception e) {
+                // Log but don't fail
+            }
+        }
         delegate.close();
     }
 
@@ -162,25 +193,65 @@ public class DataLogAdapter implements FileLog {
     // ========== FileLog-specific operations ==========
 
     /**
-     * Roll operation - delegates to FileLog if available, otherwise returns null.
+     * Roll operation - delegates to FileLog if available, otherwise creates/returns a dummy segment.
      */
     @Override
-    public LogSegment roll(Long expectedNextOffset) {
+    public synchronized LogSegment roll(Long expectedNextOffset) {
         if (delegateIsFileLog) {
             return ((FileLog) delegate).roll(expectedNextOffset);
         }
-        return null;
+        // For non-FileLog delegates, create a dummy segment if needed
+        ensureDummySegment();
+        return dummySegment;
     }
 
     /**
-     * Get log segments - delegates to FileLog if available, otherwise returns empty segments.
+     * Get log segments - delegates to FileLog if available, otherwise returns dummy segments.
      */
     @Override
-    public LogSegments segments() {
+    public synchronized LogSegments segments() {
         if (delegateIsFileLog) {
             return ((FileLog) delegate).segments();
         }
-        return new LogSegments(delegate.topicPartition());
+        // Ensure we have a dummy segment
+        ensureDummySegment();
+        return dummySegments;
+    }
+
+    /**
+     * Ensures that a dummy segment exists for non-FileLog delegates.
+     * This creates a minimal placeholder segment to satisfy UnifiedLog's segment expectations.
+     * The dummy segment prevents null pointer exceptions but actual data is stored in the delegate.
+     */
+    private synchronized void ensureDummySegment() {
+        if (dummySegment == null && !delegateIsFileLog) {
+            try {
+                // Create a temporary directory for the dummy segment files
+                File tempDir = File.createTempFile("dummy-segment", ".tmp");
+                if (!tempDir.delete()) {
+                    throw new IOException("Failed to delete temporary file: " + tempDir);
+                }
+                if (!tempDir.mkdir()) {
+                    throw new IOException("Failed to create temporary directory: " + tempDir);
+                }
+                tempDir.deleteOnExit();
+
+                // Create a dummy segment at offset 0
+                dummySegment = LogSegment.open(
+                        tempDir,
+                        0L,
+                        delegate.config(),
+                        delegate.time(),
+                        delegate.config().initFileSize(),
+                        delegate.config().preallocate
+                );
+
+                // Add to dummy segments
+                dummySegments.add(dummySegment);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to create dummy segment", e);
+            }
+        }
     }
 
     /**
@@ -327,13 +398,13 @@ public class DataLogAdapter implements FileLog {
     }
 
     /**
-     * Get log dir failure channel - delegates to FileLog if available, otherwise returns null.
+     * Get log dir failure channel - delegates to FileLog if available, otherwise returns the provided channel.
      */
     @Override
     public LogDirFailureChannel logDirFailureChannel() {
         if (delegateIsFileLog) {
             return ((FileLog) delegate).logDirFailureChannel();
         }
-        return null;
+        return logDirFailureChannel;
     }
 }

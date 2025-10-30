@@ -103,7 +103,9 @@ public class MemoryLog implements DataLog {
         }
 
         // Collect batches up to maxLength
-        ByteBuffer buffer = ByteBuffer.allocate(maxLength);
+        // Cap maxLength to avoid OutOfMemoryError
+        int cappedMaxLength = Math.min(maxLength, 100 * 1024 * 1024); // Cap at 100MB
+        ByteBuffer buffer = ByteBuffer.allocate(cappedMaxLength);
         int startIdx = entry.getValue();
         boolean firstBatch = true;
 
